@@ -1,0 +1,64 @@
+# Local / reference deployment: NGINX front + Octopus Energy MCP backend.
+#
+#   docker compose up -d
+#   -> MCP endpoint: http://<host>:8080/mcp
+#
+# The MCP image is always pulled fresh from GHCR (pull_policy: below);
+# CI republishes :latest on every push to main (build-and-push.yml).
+#
+# Required vars come from the repo .env file (see .env.example); compose
+# reads it automatically for the ${...} substitution below.
+name: octopus-mcp
+
+services:
+  mcp:
+    image: ghcr.io/ngfw-automation/octopus-energy-mcp-server:latest
+    pull_policy: always
+    environment:
+      # Required
+      OCTOPUS_API_KEY: ${OCTOPUS_API_KEY:?set in .env}
+      OCTOPUS_ACCOUNT_NUMBER: ${OCTOPUS_ACCOUNT_NUMBER:?set in .env}
+      # Optional pinning / behaviour
+      OCTOPUS_ELECTRICITY_MPAN: ${OCTOPUS_ELECTRICITY_MPAN:-}
+      OCTOPUS_ELECTRICITY_SERIAL: ${OCTOPUS_ELECTRICITY_SERIAL:-}
+      OCTOPUS_GAS_MPRN: ${OCTOPUS_GAS_MPRN:-}
+      OCTOPUS_GAS_SERIAL: ${OCTOPUS_GAS_SERIAL:-}
+      OCTOPUS_EXPORT_MPAN: ${OCTOPUS_EXPORT_MPAN:-}
+      DEFAULT_PAYMENT_METHOD: ${DEFAULT_PAYMENT_METHOD:-}
+      OCTOPUS_GAS_UNITS: ${OCTOPUS_GAS_UNITS:-}
+      GAS_CALORIFIC_VALUE: ${GAS_CALORIFIC_VALUE:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Extra Host / Origin values the server will answer to, comma separated.
+      # Needed when something reaches it by a name other than localhost --
+      # a tailnet name, for instance. See "Exposure" in the README.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      # VAT-inclusive pence/day; only needed when your bill differs from the
+      # standing charge the tariff publishes.
+      STANDING_CHARGE_ELECTRICITY: ${STANDING_CHARGE_ELECTRICITY:-}
+      STANDING_CHARGE_GAS: ${STANDING_CHARGE_GAS:-}
+      # Network: bind all interfaces inside the container; host exposure
+      # goes through nginx only.
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  nginx:
+    # Chainguard nginx, pinned by digest (version lock).
+    # sha256:8a4981bd... == nginx 1.31.5 as of 2026-09-04.
+    image: cgr.dev/chainguard/nginx:latest@sha256:8a4981bd9d32dcf4406bbbac259565962f15c5c3cc235bf9df98fe2e5a9cea19
+    depends_on:
+      - mcp
+    ports:
+      # Loopback only. The MCP endpoint has no authentication: anything that
+      # can reach it can read the whole account. Publishing on 0.0.0.0 hands
+      # your energy data to every device on the network. To reach it from
+      # another machine, leave this alone and use Tailscale -- see "Exposure"
+      # in the README.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # Replaces the image's default conf.d (which listens on 8080 too).
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+    restart: unless-stopped

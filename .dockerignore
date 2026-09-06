@@ -1,0 +1,24 @@
+# Keep the build context minimal and never ship secrets or local state.
+.git
+.venv
+venv
+env
+.env
+.env.example
+.qwen
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+*.egg-info
+build
+dist
+
+# Repo-local tooling and notes — not needed in the image
+tests
+deploy
+Octopus MCP Spec.md
+compose.yaml
+Dockerfile
+.dockerignore

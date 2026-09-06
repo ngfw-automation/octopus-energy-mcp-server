@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ngfw-automation/octopus-energy-mcp-server
+
+jobs:
+  # Nothing gets published that hasn't passed here first. The image used to
+  # build and push straight from a commit, with the test suite never run.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor declared in pyproject, and current.
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests scripts
+
+      - name: Test
+        run: pytest -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      # Two things below only work, or only make sense, on a public repo:
+      #  - GitHub refuses to persist artifact attestations for a private
+      #    repository unless the account is on Enterprise Cloud. It is a hard
+      #    error, and it failed every push to main for a fortnight.
+      #  - Keyless cosign signing publishes this repo's identity and the image
+      #    digest to the public Rekor transparency log, which is an odd thing
+      #    to do for a repository being kept private.
+      # Both switch themselves on when the repo goes public -- which is also
+      # when they start to matter, because that is when anyone else can pull
+      # the image. The SBOM and SLSA provenance buildx attaches below are
+      # unaffected: they travel inside the image, not through GitHub.
+      PUBLIC: ${{ github.event.repository.visibility == 'public' }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write        # keyless signing + provenance
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Set up image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # So a puller can tell where the image came from and what is in it.
+          sbom: true
+          provenance: mode=max
+
+      - name: Attest provenance
+        if: github.event_name != 'pull_request' && env.PUBLIC == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request' && env.PUBLIC == 'true'
+        # No moving v4 tag exists: this action publishes major aliases only up
+        # to v3, and its v4 line as specific tags. Pinned exactly, which is
+        # what a signing tool warrants anyway; Dependabot will bump it.
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign the image (keyless)
+        if: github.event_name != 'pull_request' && env.PUBLIC == 'true'
+        run: cosign sign --yes "${REGISTRY}/${IMAGE}@${DIGEST}"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+
+      - name: Report the digest to pin
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### Image published"
+            echo ""
+            echo '`'"${REGISTRY}/${IMAGE}@${DIGEST}"'`'
+            echo ""
+            echo "Pin this digest in compose.yaml to stop \`:latest\` moving under you."
+            if [ "${PUBLIC}" != "true" ]; then
+              echo ""
+              echo "> Provenance attestation and cosign signing were skipped: GitHub"
+              echo "> refuses attestations on private repositories outside Enterprise"
+              echo "> Cloud, and keyless signing would publish this repo's name and"
+              echo "> image digests to the public Rekor log. Both run automatically"
+              echo "> once the repository is public. The image still carries the SBOM"
+              echo "> and SLSA provenance that buildx attached."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

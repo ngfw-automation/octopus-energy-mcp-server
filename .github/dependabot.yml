@@ -1,0 +1,48 @@
+version: 2
+
+# Dependabot opens a pull request whenever something it watches falls behind.
+# Ungrouped, that is one PR per dependency -- which is how the first scan
+# produced ten of them at once, and why the 5-per-ecosystem default limit
+# quietly left three actions unproposed.
+#
+# The grouping below batches every minor and patch bump for an ecosystem into
+# ONE pull request a week, and a group counts as one PR against that limit.
+# Major bumps are deliberately left out of the groups, so each still arrives on
+# its own and gets read properly: a major version is where the breaking change
+# lives, and it should not ride in on a batch. (This project has already lived
+# through one: mcp 1.x -> 2.x renamed FastMCP to MCPServer.)
+#
+# Every one of these PRs runs the full test suite before it can be merged,
+# which is what makes accepting a batch reasonable rather than reckless.
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-packages:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Base images are pinned by digest, so these PRs are how the containers get
+  # security patches at all. Not split by semver: a digest bump carries no
+  # version number to classify.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      base-images:
+        patterns: ["*"]
