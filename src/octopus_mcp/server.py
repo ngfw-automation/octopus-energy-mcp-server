@@ -403,7 +403,6 @@ async def _consumption_result(
     unit: str,
     include_raw: bool,
     notes: list[str],
-    allow_sc_override: bool = True,
 ) -> dict[str, Any]:
     """The response body shared by the electricity, gas and export tools."""
     if unit == "GBP":
@@ -415,7 +414,6 @@ async def _consumption_result(
             period_to,
             group_by,
             notes,
-            allow_sc_override=allow_sc_override,
         )
         if "error" not in result:
             result[id_key] = idv
@@ -569,7 +567,6 @@ async def _cost_series(
     period_to: str,
     group_by: str,
     notes: list[str],
-    allow_sc_override: bool = True,
 ) -> dict[str, Any]:
     """Price half-hourly consumption rows against the meter point's tariff.
 
@@ -661,14 +658,7 @@ async def _cost_series(
             )
     # The standing charge is part of what the period cost, so it belongs in
     # the total even though it cannot be attributed to a consumption bucket.
-    sc_override = (
-        s.standing_charge_electricity if fuel == "electricity" else s.standing_charge_gas
-    )
-    if not allow_sc_override:
-        sc_override = None  # an export tariff has no import standing charge
-    sc_exc, sc_note, sc_source = shaping.sc_pence_for_period(
-        sc_rows, period_from, period_to, sc_override, pm
-    )
+    sc_exc, sc_note, sc_source = shaping.sc_pence_for_period(sc_rows, period_from, period_to, pm)
     if sc_note:
         notes.append(sc_note)
     unit_cost_gbp = round(stats["total"], 2)
@@ -1035,7 +1025,6 @@ async def get_export_consumption(
         result = await _consumption_result(
             "electricity", resolved["point"], "mpan", idv, serial_v, rows,
             period_from, period_to, group_by, unit, include_raw, notes,
-            allow_sc_override=False,
         )
         if "error" not in result:
             result["direction"] = "EXPORT"
@@ -1391,11 +1380,6 @@ async def get_unit_rates(
         return {"error": "bad_input", "message": str(e)}
 
 
-def env_name_hint(fuel: str) -> str:
-    """The .env name of the standing-charge override for a fuel."""
-    return "STANDING_CHARGE_ELECTRICITY" if fuel == "electricity" else "STANDING_CHARGE_GAS"
-
-
 @mcp.tool()
 async def get_standing_charges(
     product_code: Annotated[str, Field(description="Product code (from get_agreements).")],
@@ -1465,30 +1449,11 @@ async def get_standing_charges(
             else:
                 notes.append(f"No standing charge for payment method {pm}; all are shown.")
 
-        configured = (
-            s.standing_charge_electricity if fuel == "electricity" else s.standing_charge_gas
-        )
-        published = any(c["value_exc_vat"] for c in charges)
-        if not published:
-            env_name = (
-                "STANDING_CHARGE_ELECTRICITY" if fuel == "electricity" else "STANDING_CHARGE_GAS"
-            )
-            if configured is not None:
-                notes.append(
-                    "This tariff publishes no standing charge, so "
-                    f"configured_standing_charge_p_per_day_inc_vat ({configured} p/day, "
-                    f"pinned as {env_name}) is the account's charge."
-                )
-            else:
-                notes.append(
-                    "This tariff publishes no standing charge. If your bill shows one, "
-                    f"pin it with {env_name} (VAT-inclusive pence per day)."
-                )
-        elif configured is not None:
+        if not any(c["value_exc_vat"] for c in charges):
             notes.append(
-                f"{env_name_hint(fuel)} is pinned at {configured} p/day inc VAT and is "
-                "what cost calculations use, in preference to the published charge "
-                "above; clear it to use the published one."
+                "This tariff publishes no standing charge for the period. Cost "
+                "calculations therefore include none, so a bill that shows one will "
+                "be higher than they say."
             )
 
         out: dict[str, Any] = {
@@ -1500,8 +1465,6 @@ async def get_standing_charges(
             "standing_charges": charges,
             "notes": " ".join(notes) if notes else None,
         }
-        if configured is not None:
-            out["configured_standing_charge_p_per_day_inc_vat"] = configured
         return out
     except (OctopusAuthError, OctopusNotFoundError, OctopusAPIError) as e:
         return _err(e)
@@ -1787,10 +1750,7 @@ async def calculate_cost(
 
         rates, sc_rows = await _fetch_tariff_pricing(product_code, tariff_code, period_from, period_to)
         pm = _norm_pm(payment_method) or s.default_payment_method
-        sc_override = (
-            s.standing_charge_electricity if fuel == "electricity" else s.standing_charge_gas
-        )
-        b = shaping.bill_cost(rows, rates, period_from, period_to, pm, sc_rows, sc_override)
+        b = shaping.bill_cost(rows, rates, period_from, period_to, pm, sc_rows)
         if "error" in b:
             return b
 
@@ -1997,25 +1957,14 @@ async def compare_tariffs(
         total_kwh = round(sum(float(r["consumption"]) for r in rows), 3)
 
         pm = _norm_pm(payment_method) or s.default_payment_method
-        sc_override = (
-            s.standing_charge_electricity if fuel == "electricity" else s.standing_charge_gas
-        )
 
         def price(
-            rates: list[dict[str, Any]],
-            sc_rows: list[dict[str, Any]],
-            override: Optional[float] = None,
+            rates: list[dict[str, Any]], sc_rows: list[dict[str, Any]]
         ) -> dict[str, Any]:
             # A tariff that only covers part of the period cannot be ranked
             # against one that covers all of it: the unpriced kWh would count
             # as free. A product launched mid-period would win every time.
-            # The STANDING_CHARGE_* override corrects *this* account's current
-            # tariff against its bill; applying it to a candidate would price
-            # every alternative with the same daily charge and reduce the
-            # comparison to unit rates alone. Candidates use what they publish.
-            b = shaping.bill_cost(
-                rows, rates, period_from, period_to, pm, sc_rows, override
-            )
+            b = shaping.bill_cost(rows, rates, period_from, period_to, pm, sc_rows)
             if "error" in b:
                 return {"error": b["error"], "message": b.get("message")}
             unpriced = b["unpriced_kwh"]
@@ -2078,11 +2027,9 @@ async def compare_tariffs(
                     {"product_code": code, "tariff_code": tc, "error": _err(e)["error"]}
                 )
                 continue
-            priced = price(rates, sc_rows)
-            if "error" in priced:
-                candidates.append({"product_code": code, "tariff_code": tc, **priced})
-                continue
-            candidates.append({"product_code": code, "tariff_code": tc, **priced})
+            candidates.append(
+                {"product_code": code, "tariff_code": tc, **price(rates, sc_rows)}
+            )
 
         ranked = sorted((c for c in candidates if "error" not in c), key=lambda c: c["total_gbp"])
         for i, c in enumerate(ranked, 1):
@@ -2096,8 +2043,7 @@ async def compare_tariffs(
         except (OctopusAuthError, OctopusNotFoundError, OctopusAPIError) as e:
             baseline = {"product_code": bpc, "tariff_code": btc, "error": _err(e)["error"]}
         else:
-            priced = price(rates, sc_rows, sc_override)
-            baseline = {"product_code": bpc, "tariff_code": btc, **priced}
+            baseline = {"product_code": bpc, "tariff_code": btc, **price(rates, sc_rows)}
 
         if "total_gbp" in baseline:
             for c in ranked:
@@ -2106,11 +2052,6 @@ async def compare_tariffs(
 
         if not ranked:
             notes.append("None of the candidate tariffs could be priced for this region/period.")
-        if sc_override is not None and ranked:
-            notes.append(
-                "Candidates are priced at their own published standing charges; the "
-                "baseline uses the pinned STANDING_CHARGE_* value."
-            )
         out: dict[str, Any] = {
             "fuel": fuel,
             "serial": serial_v,

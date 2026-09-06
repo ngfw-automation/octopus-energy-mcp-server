@@ -347,7 +347,6 @@ def sc_pence_for_period(
     sc_rows: list[dict[str, Any]] | None,
     period_from: str,
     period_to: str,
-    override_p_per_day_inc_vat: float | None = None,
     pm: str | None = None,
 ) -> tuple[Decimal, str | None, str | None]:
     """Standing charge for ``[period_from, period_to)`` in **ex-VAT pence**.
@@ -356,15 +355,12 @@ def sc_pence_for_period(
     filtered by payment method the same way unit rates are: the requested
     method, else rows carrying no method, else the dearest other method.
 
-    ``override_p_per_day_inc_vat`` -- the VAT-inclusive pence/day figure from
-    the dashboard, pinned via ``STANDING_CHARGE_*`` -- wins when it is set,
-    because it comes from the account's own bill while the API publishes the
-    tariff's generic charge, and the two can differ by a fraction of a penny
-    a day. It is converted back to ex-VAT here so the caller can add VAT once,
-    at the end.
+    The published charge is the only source: nothing here is configurable.
+    A tariff that publishes none contributes zero pence and says so in the
+    note, rather than quietly inventing a figure.
 
-    Returns ``(pence_exc_vat, note, source)`` with source in
-    ``{"api", "configured", None}``.
+    Returns ``(pence_exc_vat, note, source)`` with source ``"api"`` or
+    ``None`` when the tariff publishes no standing charge at all.
     """
     lo, hi = parse_dt(period_from), parse_dt(period_to)
     groups: dict[str, Decimal] = {}
@@ -400,25 +396,14 @@ def sc_pence_for_period(
                 else "The tariff publishes a standing charge per payment method and "
                 "none was pinned; the highest was used (conservative)."
             )
-    if override_p_per_day_inc_vat is not None:
-        total_days = _dec((hi - lo).total_seconds()) / _SECONDS_PER_DAY
-        pence = _dec(override_p_per_day_inc_vat) / _VAT_MULTIPLIER * total_days
-        if chosen:
-            published = chosen / total_days * _VAT_MULTIPLIER if total_days else Decimal("0")
-            override_note = (
-                f"Used the configured standing charge ({override_p_per_day_inc_vat} p/day "
-                f"inc VAT) rather than the {round(float(published), 4)} p/day the tariff "
-                "publishes; clear STANDING_CHARGE_* to use the published value."
-            )
-        else:
-            override_note = (
-                "The API published no standing charge for this tariff; used the "
-                "configured STANDING_CHARGE_* value (VAT-inclusive pence per day)."
-            )
-        return pence, override_note, "configured"
     if chosen:
         return chosen, note, "api"
-    return Decimal("0"), None, "api" if sc_rows else None
+    return (
+        Decimal("0"),
+        "This tariff publishes no standing charge for the period, so none is "
+        "included in the total. If your bill shows one, the total is that much low.",
+        None,
+    )
 
 
 def sc_staleness_note(
@@ -487,7 +472,6 @@ def bill_cost(
     period_to: str,
     pm: str | None = None,
     sc_rows: list[dict[str, Any]] | None = None,
-    sc_override_p_per_day: float | None = None,
 ) -> dict[str, Any]:
     """Billing-accurate cost of ``rows`` priced at ``rates`` (spec §1.2).
 
@@ -543,9 +527,7 @@ def bill_cost(
             "message": "No consumption interval fell inside a rate's validity window.",
         }
 
-    sc_exact, sc_note, sc_source = sc_pence_for_period(
-        sc_rows, period_from, period_to, sc_override_p_per_day, pm
-    )
+    sc_exact, sc_note, sc_source = sc_pence_for_period(sc_rows, period_from, period_to, pm)
     if sc_note:
         notes.append(sc_note)
     if sc_source == "api":

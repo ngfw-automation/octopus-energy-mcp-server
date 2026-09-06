@@ -10,8 +10,6 @@ os.environ.setdefault("OCTOPUS_ACCOUNT_NUMBER", "A-TEST123")
 # Tests must not inherit the operator's .env defaults (pydantic loads .env
 # for Settings); empty string is read as "unset" by the validators.
 os.environ["DEFAULT_PAYMENT_METHOD"] = ""
-os.environ["STANDING_CHARGE_ELECTRICITY"] = ""
-os.environ["STANDING_CHARGE_GAS"] = ""
 
 from octopus_mcp.server import mcp  # noqa: E402  (env must be set before import)
 
@@ -414,53 +412,21 @@ def test_standing_charge_filters_by_payment_method(monkeypatch):
     assert out["payment_method"] == "DIRECT_DEBIT"
 
 
-def test_standing_charge_configured_override(monkeypatch):
-    out = _run_standing_charges(
-        monkeypatch, [{"value_exc_vat": 0.0}], standing_charge_electricity=50.88
-    )
-    assert out["configured_standing_charge_p_per_day_inc_vat"] == 50.88
-    assert "configured_standing_charge_p_per_day_inc_vat" in (out["notes"] or "")
-
-
-def test_standing_charge_zero_warns_when_unconfigured(monkeypatch):
+def test_standing_charge_zero_says_the_tariff_publishes_none(monkeypatch):
+    """The standing charge is not configurable: a tariff publishing none gets
+    a warning, not a value invented from the operator's .env."""
     out = _run_standing_charges(monkeypatch, [{"value_exc_vat": 0.0}])
     assert "configured_standing_charge_p_per_day_inc_vat" not in out
-    assert "STANDING_CHARGE_ELECTRICITY" in (out["notes"] or "")
+    assert "publishes no standing charge" in (out["notes"] or "")
 
 
-def test_standing_charge_gas_override(monkeypatch):
-    out = _run_standing_charges(
-        monkeypatch, [{"value_exc_vat": 0.0}], tariff="G-1R-TEST-26-01-01-A",
-        standing_charge_gas=40.0,
-    )
-    assert out["fuel"] == "gas"
-    assert out["configured_standing_charge_p_per_day_inc_vat"] == 40.0
-    assert "STANDING_CHARGE_GAS" in (out["notes"] or "")
-
-
-def test_standing_charge_shows_published_and_pinned_together(monkeypatch):
-    out = _run_standing_charges(
-        monkeypatch, SC_API_ROWS, standing_charge_electricity=50.88
-    )
-    assert out["standing_charges"][0]["value_exc_vat"] == 48.2442
-    assert out["configured_standing_charge_p_per_day_inc_vat"] == 50.88
-    assert "in preference to the published charge" in (out["notes"] or "")
-
-
-def test_settings_standing_charge_validation():
-    import pytest
-
+def test_standing_charge_is_never_configurable():
+    """Nothing about the standing charge may be pinned in the environment --
+    the API publishes it per tariff, so that is where it comes from."""
     from octopus_mcp import config
 
-    base = {"octopus_api_key": "x", "octopus_account_number": "A-TEST123"}
-    assert config.Settings(**base).standing_charge_electricity is None
-    assert (
-        config.Settings(standing_charge_electricity="50.88", **base).standing_charge_electricity
-        == 50.88
-    )
-    assert config.Settings(standing_charge_gas="", **base).standing_charge_gas is None
-    with pytest.raises(ValueError, match="pence per day"):
-        config.Settings(standing_charge_electricity=-1, **base)
+    fields = set(config.Settings.model_fields)
+    assert not [f for f in fields if f.startswith("standing_charge")]
 
 
 # --- calculate_cost / compare_tariffs (billing-accurate, spec §1.2) --------
