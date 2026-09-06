@@ -1048,6 +1048,241 @@ async def get_export_consumption(
         return {"error": "bad_input", "message": str(e)}
 
 
+def _product_row(p: dict[str, Any]) -> dict[str, Any]:
+    """One catalogue row, trimmed to what picks a product out of a list."""
+    row = {
+        "product_code": p.get("code"),
+        "display_name": p.get("display_name"),
+        "direction": p.get("direction"),
+        "brand": p.get("brand"),
+        "available_from": p.get("available_from"),
+        "available_to": p.get("available_to"),
+    }
+    flags = [k[3:] for k in ("is_variable", "is_green", "is_tracker", "is_prepay", "is_business")
+             if p.get(k)]
+    if flags:
+        row["flags"] = flags
+    if p.get("term"):
+        row["term_months"] = p["term"]
+    return row
+
+
+@mcp.tool()
+async def list_products(
+    query: Annotated[
+        Optional[str],
+        Field(description='Substring of the code or display name, e.g. "go", "cosy", "agile".'),
+    ] = None,
+    direction: Annotated[
+        Literal["IMPORT", "EXPORT", "ANY"],
+        Field(description="IMPORT for tariffs you buy on, EXPORT for what you are paid for."),
+    ] = "IMPORT",
+    available_only: Annotated[
+        bool, Field(description="Only products still open to new customers.")
+    ] = True,
+    include_business: Annotated[bool, Field(description="Include business tariffs.")] = False,
+    is_variable: Annotated[Optional[bool], Field(description="Filter on variable pricing.")] = None,
+    is_green: Annotated[Optional[bool], Field(description="Filter on green tariffs.")] = None,
+    is_tracker: Annotated[Optional[bool], Field(description="Filter on tracker tariffs.")] = None,
+    is_prepay: Annotated[Optional[bool], Field(description="Filter on prepayment tariffs.")] = None,
+    available_at: Annotated[
+        Optional[str],
+        Field(description="Show the catalogue as it stood at this date (ISO-8601 or YYYY-MM-DD)."),
+    ] = None,
+) -> dict[str, Any]:
+    """Browse the Octopus tariff catalogue: every product and its code.
+
+    This is the entry point for any question about what tariffs exist. The
+    catalogue is public and needs no credentials. Use the ``product_code`` it
+    returns with get_product for the rates, or with compare_tariffs to price a
+    candidate against this account's own consumption.
+    """
+    try:
+        s = get_settings()
+        params: dict[str, Any] = {"page_size": 100}
+        if available_at:
+            params["available_at"] = shaping.to_utc_z(available_at)
+        rows = await rest().get_all(
+            "/products/", params=params, auth=False, ttl=s.cache_ttl_products, max_pages=10
+        )
+
+        needle = (query or "").strip().lower()
+        out = []
+        for p in rows:
+            if direction != "ANY" and p.get("direction") != direction:
+                continue
+            if not include_business and p.get("is_business"):
+                continue
+            if available_only and p.get("available_to") is not None:
+                continue
+            if needle and needle not in f"{p.get('code','')} {p.get('display_name','')}".lower():
+                continue
+            for flag, want in (("is_variable", is_variable), ("is_green", is_green),
+                               ("is_tracker", is_tracker), ("is_prepay", is_prepay)):
+                if want is not None and bool(p.get(flag)) != want:
+                    break
+            else:
+                out.append(_product_row(p))
+
+        out.sort(key=lambda r: r["product_code"] or "")
+        notes = [
+            "Codes from here go to get_product (rates by region) or compare_tariffs "
+            "(priced against your own consumption)."
+        ]
+        if available_only:
+            notes.append("Only products still open to new customers; pass available_only=false for the rest.")
+        return {
+            "count": len(out),
+            "catalogue_size": len(rows),
+            "products": _truncate(out, notes),
+            "notes": " ".join(notes),
+        }
+    except (OctopusAuthError, OctopusNotFoundError, OctopusAPIError) as e:
+        return _err(e)
+    except ValueError as e:
+        return {"error": "bad_input", "message": str(e)}
+
+
+_REGISTER_LABELS = {
+    "single_register_electricity_tariffs": "electricity_single_register",
+    "dual_register_electricity_tariffs": "electricity_dual_register",
+    "four_rate_ev_electricity_tariffs": "electricity_four_rate_ev",
+    "single_register_gas_tariffs": "gas_single_register",
+    "dual_register_gas_tariffs": "gas_dual_register",
+}
+
+
+async def _catalogue_direction(product_code: str) -> Optional[str]:
+    """The product detail payload omits ``direction``; the catalogue row carries it."""
+    try:
+        s = get_settings()
+        rows = await rest().get_all(
+            "/products/", params={"page_size": 100}, auth=False,
+            ttl=s.cache_ttl_products, max_pages=10,
+        )
+    except (OctopusAuthError, OctopusNotFoundError, OctopusAPIError):
+        return None
+    for p in rows:
+        if p.get("code") == product_code:
+            return p.get("direction")
+    return None
+
+
+async def _account_region() -> Optional[str]:
+    """The GSP region of this account's meters, when it can be determined."""
+    try:
+        for point in iter_meter_points(await get_account()):
+            if point.get("region"):
+                return point["region"]
+    except (OctopusAuthError, OctopusNotFoundError, OctopusAPIError):
+        return None
+    return None
+
+
+@mcp.tool()
+async def get_product(
+    product_code: Annotated[
+        str, Field(description="Product code from list_products, e.g. GO-VAR-22-10-14.")
+    ],
+    region: Annotated[
+        Optional[str],
+        Field(description="GSP region letter A-P. Defaults to this account's region."),
+    ] = None,
+    tariffs_active_at: Annotated[
+        Optional[str], Field(description="Rates as they stood at this date.")
+    ] = None,
+) -> dict[str, Any]:
+    """A product's details and its tariff codes and headline rates for one region.
+
+    Prices differ by region, so this answers for yours unless you name another.
+    The unit rate shown is the product's headline figure: for a time-of-use
+    tariff such as Agile or Go it does not describe the cheap window, so use
+    get_unit_rates on the tariff code for the actual per-slot prices.
+    """
+    try:
+        s = get_settings()
+        params: dict[str, Any] = {}
+        if tariffs_active_at:
+            params["tariffs_active_at"] = shaping.to_utc_z(tariffs_active_at)
+        product = await rest().get(
+            f"/products/{product_code}/", params=params, auth=False, ttl=s.cache_ttl_products
+        )
+
+        groups = {k: v for k, v in product.items() if k.endswith("_tariffs") and v}
+        regions = sorted({r.lstrip("_") for g in groups.values() for r in g})
+        notes: list[str] = []
+
+        wanted = (region or "").strip().upper().lstrip("_") or None
+        if wanted is None:
+            wanted = await _account_region()
+            if wanted:
+                notes.append(f"Showing region {wanted}, this account's region.")
+        if wanted is None:
+            return {
+                "error": "region_required",
+                "message": "Could not determine your region; pass one.",
+                "available_regions": regions,
+            }
+        if regions and wanted not in regions:
+            return {
+                "error": "region_not_offered",
+                "message": f"{product_code} is not offered in region {wanted}.",
+                "available_regions": regions,
+            }
+
+        tariffs: dict[str, Any] = {}
+        for group, by_region in groups.items():
+            entry = by_region.get(f"_{wanted}")
+            if not isinstance(entry, dict):
+                continue
+            for rate_type, t in entry.items():
+                if not isinstance(t, dict) or not t.get("code"):
+                    continue
+                tariffs.setdefault(_REGISTER_LABELS.get(group, group), {})[rate_type] = {
+                    "tariff_code": t["code"],
+                    "standing_charge_p_day_inc_vat": t.get("standing_charge_inc_vat"),
+                    "unit_rate_p_kwh_inc_vat": t.get("standard_unit_rate_inc_vat"),
+                    "unit_rate_p_kwh_exc_vat": t.get("standard_unit_rate_exc_vat"),
+                    "exit_fees_inc_vat": t.get("exit_fees_inc_vat") or None,
+                }
+        if not tariffs:
+            return {
+                "error": "no_tariffs",
+                "message": f"{product_code} publishes no tariffs for region {wanted}.",
+                "available_regions": regions,
+            }
+        if product.get("is_variable"):
+            notes.append(
+                "Variable product: the unit rate above is the headline figure. For a "
+                "time-of-use tariff (Agile, Go, Cosy) call get_unit_rates on the tariff "
+                "code for the per-slot prices and the cheap window."
+            )
+
+        description = (product.get("description") or "").strip()
+        direction = product.get("direction") or await _catalogue_direction(product_code)
+        return {
+            "product_code": product.get("code"),
+            "display_name": product.get("display_name"),
+            "full_name": product.get("full_name"),
+            "description": description[:400] + ("…" if len(description) > 400 else ""),
+            "brand": product.get("brand"),
+            "direction": direction,
+            "term_months": product.get("term"),
+            "available_from": product.get("available_from"),
+            "available_to": product.get("available_to"),
+            "flags": [k[3:] for k in ("is_variable", "is_green", "is_tracker", "is_prepay", "is_business")
+                      if product.get(k)],
+            "region": wanted,
+            "available_regions": regions,
+            "tariffs": tariffs,
+            "notes": " ".join(notes) or None,
+        }
+    except (OctopusAuthError, OctopusNotFoundError, OctopusAPIError) as e:
+        return _err(e)
+    except ValueError as e:
+        return {"error": "bad_input", "message": str(e)}
+
+
 @mcp.tool()
 async def get_unit_rates(
     product_code: Annotated[
@@ -1771,6 +2006,9 @@ async def compare_tariffs(
             sc_rows: list[dict[str, Any]],
             override: Optional[float] = None,
         ) -> dict[str, Any]:
+            # A tariff that only covers part of the period cannot be ranked
+            # against one that covers all of it: the unpriced kWh would count
+            # as free. A product launched mid-period would win every time.
             # The STANDING_CHARGE_* override corrects *this* account's current
             # tariff against its bill; applying it to a candidate would price
             # every alternative with the same daily charge and reduce the
@@ -1780,6 +2018,20 @@ async def compare_tariffs(
             )
             if "error" in b:
                 return {"error": b["error"], "message": b.get("message")}
+            unpriced = b["unpriced_kwh"]
+            if unpriced and total_kwh and unpriced > total_kwh * 0.01:
+                covered = 1 - unpriced / total_kwh
+                return {
+                    "error": "incomplete_rate_coverage",
+                    "message": (
+                        f"This tariff publishes rates for only {covered:.0%} of the period "
+                        f"({unpriced} of {total_kwh} kWh unpriced) -- usually because the "
+                        "product launched partway through it. Not ranked: the total would "
+                        "treat the rest as free. Compare over a period it fully covers."
+                    ),
+                    "priced_share": round(covered, 4),
+                    "unpriced_kwh": unpriced,
+                }
             candidate_notes = list(b["notes"])
             bands = b.get("rate_bands")
             if bands:
@@ -1828,14 +2080,7 @@ async def compare_tariffs(
                 continue
             priced = price(rates, sc_rows)
             if "error" in priced:
-                candidates.append(
-                    {
-                        "product_code": code,
-                        "tariff_code": tc,
-                        "error": priced["error"],
-                        "message": priced.get("message"),
-                    }
-                )
+                candidates.append({"product_code": code, "tariff_code": tc, **priced})
                 continue
             candidates.append({"product_code": code, "tariff_code": tc, **priced})
 

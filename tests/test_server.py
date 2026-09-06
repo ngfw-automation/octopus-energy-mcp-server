@@ -1,4 +1,4 @@
-"""Smoke tests: the server imports, all seven tools register, and their input
+"""Smoke tests: the server imports, all tools register, and their input
 schemas are valid objects. No network is touched here."""
 
 import asyncio
@@ -25,6 +25,8 @@ EXPECTED_TOOLS = {
     "get_agreements",
     "calculate_cost",
     "compare_tariffs",
+    "list_products",
+    "get_product",
 }
 
 
@@ -1083,3 +1085,164 @@ def test_host_validation_accepts_loopback_and_rejects_anything_else(monkeypatch)
     assert mw._validate_origin(None)  # non-browser clients send no Origin
     assert mw._validate_origin("http://localhost:8080")
     assert not mw._validate_origin("https://evil.example.com")
+
+
+# --- F-17: a tariff that only covers part of the period must not be ranked
+
+
+def test_partial_rate_coverage_is_not_ranked(monkeypatch):
+    """A product that launched mid-period publishes no rates for the days
+    before it existed. Totalling only what it can price ranked it first, as
+    though the rest of the month were free."""
+    products = {
+        "FULL-26-01-01": {
+            "single_register_electricity_tariffs": {"_C": {"varying": {"code": "E-1R-FULL-26-01-01-C"}}}
+        },
+        "LATE-26-08-01": {
+            "single_register_electricity_tariffs": {"_C": {"varying": {"code": "E-1R-LATE-26-08-01-C"}}}
+        },
+    }
+    rates = {
+        "E-1R-FULL-26-01-01-C": [
+            {"valid_from": "2026-07-01T00:00:00Z", "valid_to": None,
+             "value_exc_vat": 30.0, "payment_method": "DIRECT_DEBIT"},
+        ],
+        # Launched halfway through: nothing before 00:30, so the 00:00 interval
+        # cannot be priced. Cheap enough that it would win if it were ranked.
+        "E-1R-LATE-26-08-01-C": [
+            {"valid_from": "2026-08-01T00:30:00Z", "valid_to": None,
+             "value_exc_vat": 1.0, "payment_method": "DIRECT_DEBIT"},
+        ],
+    }
+    out = _run_compare(monkeypatch, products, rates)
+    by_code = {c["product_code"]: c for c in out["candidates"]}
+
+    late = by_code["LATE-26-08-01"]
+    assert late["error"] == "incomplete_rate_coverage"
+    assert "rank" not in late
+    assert abs(late["priced_share"] - 2 / 3) < 0.01
+    assert "launched partway" in late["message"]
+
+    full = by_code["FULL-26-01-01"]
+    assert full["rank"] == 1  # the only candidate that could be priced at all
+
+
+# --- list_products / get_product: the tariff catalogue ---------------------
+
+CATALOGUE = [
+    {"code": "GO-VAR-22-10-14", "display_name": "Octopus Go", "direction": "IMPORT",
+     "brand": "OCTOPUS_ENERGY", "is_variable": True, "is_green": False, "is_business": False,
+     "is_prepay": False, "is_tracker": False, "available_from": "2022-10-14", "available_to": None},
+    {"code": "VAR-22-11-01", "display_name": "Flexible Octopus", "direction": "IMPORT",
+     "brand": "OCTOPUS_ENERGY", "is_variable": True, "is_green": True, "is_business": False,
+     "is_prepay": False, "is_tracker": False, "available_from": "2022-11-01", "available_to": None},
+    {"code": "GONE-20-01-01", "display_name": "Withdrawn Tariff", "direction": "IMPORT",
+     "brand": "OCTOPUS_ENERGY", "is_variable": False, "is_green": False, "is_business": False,
+     "is_prepay": False, "is_tracker": False, "available_from": "2020-01-01",
+     "available_to": "2021-01-01"},
+    {"code": "BIZ-24-01-01", "display_name": "Business Fixed", "direction": "IMPORT",
+     "brand": "OCTOPUS_ENERGY", "is_business": True, "available_from": "2024-01-01",
+     "available_to": None},
+    {"code": "OUTGOING-VAR-24-10-26", "display_name": "Outgoing Octopus", "direction": "EXPORT",
+     "brand": "OCTOPUS_ENERGY", "is_business": False, "available_from": "2024-10-26",
+     "available_to": None},
+]
+
+PRODUCT_DETAIL = {
+    "code": "GO-VAR-22-10-14",
+    "display_name": "Octopus Go",
+    "full_name": "Octopus Go October 2022 v1",
+    "description": "Cheap overnight electricity for EV drivers.",
+    "brand": "OCTOPUS_ENERGY",
+    "direction": "IMPORT",
+    "term": None,
+    "is_variable": True,
+    "available_from": "2022-10-14",
+    "available_to": None,
+    "single_register_electricity_tariffs": {
+        "_A": {"direct_debit_monthly": {
+            "code": "E-1R-GO-VAR-22-10-14-A",
+            "standing_charge_exc_vat": 51.3256, "standing_charge_inc_vat": 53.89188,
+            "standard_unit_rate_exc_vat": 29.6946, "standard_unit_rate_inc_vat": 31.17933,
+            "exit_fees_inc_vat": 0.0}},
+        "_C": {"direct_debit_monthly": {
+            "code": "E-1R-GO-VAR-22-10-14-C",
+            "standing_charge_inc_vat": 49.0, "standard_unit_rate_inc_vat": 30.0}},
+    },
+    "dual_register_electricity_tariffs": {},
+}
+
+
+def _run_catalogue(monkeypatch, tool, account=None, **kwargs):
+    import octopus_mcp.server as srv
+
+    class FakeRest:
+        async def get_all(self, url, **k):
+            return list(CATALOGUE)
+
+        async def get(self, url, **k):
+            return dict(PRODUCT_DETAIL)
+
+    async def fake_account():
+        if account is None:
+            raise srv.OctopusAuthError("no account")
+        return account
+
+    _settings(monkeypatch)
+    monkeypatch.setattr(srv, "get_account", fake_account)
+    monkeypatch.setattr(srv, "rest", lambda: FakeRest())
+    return asyncio.run(getattr(srv, tool)(**kwargs))
+
+
+def test_list_products_defaults_to_available_domestic_import(monkeypatch):
+    out = _run_catalogue(monkeypatch, "list_products")
+    codes = [p["product_code"] for p in out["products"]]
+    assert codes == ["GO-VAR-22-10-14", "VAR-22-11-01"]
+    assert out["catalogue_size"] == 5          # withdrawn, business and export filtered out
+    assert "GONE-20-01-01" not in codes
+    assert "BIZ-24-01-01" not in codes
+    assert "OUTGOING-VAR-24-10-26" not in codes
+
+
+def test_list_products_query_and_filters(monkeypatch):
+    assert [p["product_code"] for p in
+            _run_catalogue(monkeypatch, "list_products", query="go")["products"]] == ["GO-VAR-22-10-14"]
+    assert [p["product_code"] for p in
+            _run_catalogue(monkeypatch, "list_products", direction="EXPORT")["products"]] \
+        == ["OUTGOING-VAR-24-10-26"]
+    assert "GONE-20-01-01" in [p["product_code"] for p in
+                               _run_catalogue(monkeypatch, "list_products",
+                                              available_only=False)["products"]]
+    assert [p["product_code"] for p in
+            _run_catalogue(monkeypatch, "list_products", is_green=True)["products"]] == ["VAR-22-11-01"]
+
+
+def test_get_product_defaults_to_the_accounts_region(monkeypatch):
+    out = _run_catalogue(monkeypatch, "get_product", account=REAL_SHAPE_ACCOUNT,
+                         product_code="GO-VAR-22-10-14")
+    assert out["region"] == "A"                      # derived from the account's tariff code
+    assert "this account's region" in out["notes"]
+    tariff = out["tariffs"]["electricity_single_register"]["direct_debit_monthly"]
+    assert tariff["tariff_code"] == "E-1R-GO-VAR-22-10-14-A"
+    assert tariff["standing_charge_p_day_inc_vat"] == 53.89188
+    assert out["available_regions"] == ["A", "C"]
+    assert "get_unit_rates" in out["notes"]          # headline rate is not the cheap window
+
+
+def test_get_product_explicit_region_and_unknown_region(monkeypatch):
+    out = _run_catalogue(monkeypatch, "get_product", account=REAL_SHAPE_ACCOUNT,
+                         product_code="GO-VAR-22-10-14", region="c")
+    assert out["region"] == "C"
+    assert out["tariffs"]["electricity_single_register"]["direct_debit_monthly"]["tariff_code"] \
+        == "E-1R-GO-VAR-22-10-14-C"
+
+    missing = _run_catalogue(monkeypatch, "get_product", account=REAL_SHAPE_ACCOUNT,
+                             product_code="GO-VAR-22-10-14", region="P")
+    assert missing["error"] == "region_not_offered"
+    assert missing["available_regions"] == ["A", "C"]
+
+
+def test_get_product_asks_for_a_region_when_it_cannot_tell(monkeypatch):
+    out = _run_catalogue(monkeypatch, "get_product", product_code="GO-VAR-22-10-14")
+    assert out["error"] == "region_required"
+    assert out["available_regions"] == ["A", "C"]
