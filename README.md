@@ -21,6 +21,8 @@ charges. Built per `Octopus MCP Spec.md` — this is the Phase 1 (REST-only) MVP
 | `get_export_consumption` | Solar/battery export on the export MPAN, in kWh or as earnings (`unit="GBP"`) |
 | `get_unit_rates` | Tariff unit rates in p/kWh — fixed or Agile (half-hourly) |
 | `get_standing_charges` | Standing charge history in p/day, ex and inc VAT, per payment method |
+| `list_products` | Browse the public Octopus product catalogue — every tariff and its `product_code`, filterable by name, direction, availability and flags (variable, green, tracker, prepay) |
+| `get_product` | One product's details plus its tariff codes and headline rates for your region (or one you name) |
 | `list_meter_points` | Discover MPANs/MPRNs, meters, region, and active tariffs |
 | `get_agreements` | Current + historical tariff agreements (gives `product_code`/`tariff_code`) |
 | `calculate_cost` | Invoice-accurate cost over a period as a pence breakdown: kWh rounded per half-hour, priced at the exc-VAT rate, standing charge added, 5% VAT on top. Reconciles to within a penny of a real monthly bill |
@@ -29,8 +31,9 @@ charges. Built per `Octopus MCP Spec.md` — this is the Phase 1 (REST-only) MVP
 A typical flow: `list_meter_points` / `get_agreements` to find your MPAN and
 active tariff, then `get_electricity_consumption` for usage and
 `get_unit_rates` + `get_standing_charges` for the tariff price. For an
-invoice-accurate total over a period, use `calculate_cost`; to check whether
-switching products would save money, use `compare_tariffs`.
+invoice-accurate total over a period, use `calculate_cost`. To find out what
+else is on offer, `list_products` then `get_product`; to check whether
+switching would save money, feed those codes to `compare_tariffs`.
 
 ## Setup
 
