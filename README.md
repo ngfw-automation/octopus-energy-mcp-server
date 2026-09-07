@@ -1,4 +1,4 @@
-# Octopus Energy MCP Server
+# Octopus Energy (UK) MCP Server
 
 Read your own Octopus Energy account from an AI chat app. Point Claude — or
 any other app that speaks MCP — at this server and ask about your electricity
@@ -804,6 +804,6 @@ pytest -q && ruff check .
 verified against a real account — a gas-meter fix from someone with a gas
 meter beats a careful guess from someone without one.
 
-# Licence
+# License
 
 MIT — see [LICENSE](LICENSE).
