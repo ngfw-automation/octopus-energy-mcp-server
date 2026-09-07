@@ -1,0 +1,112 @@
+name: Compatibility report
+description: Your account is more interesting than the one this was tested on. Tell us what happened.
+title: "[compat] "
+labels: ["compatibility", "help wanted"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Everything in this project was verified against a single property with
+        one electricity meter, no gas, no export, region A, on direct debit.
+        Every other shape — gas, dual fuel, multiple meters, multiple
+        properties, export, Economy 7, prepayment, the other thirteen regions —
+        is written from the API docs and reasoning, and has never been run
+        against real data.
+
+        **A report that it worked is as useful as one that it didn't.** Right
+        now nobody knows either way.
+
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction
+      options:
+        - label: >
+            I have removed my MPAN, MPRN, meter serial, account number, address,
+            postcode and API key from everything I'm about to paste.
+          required: true
+
+  - type: checkboxes
+    id: shape
+    attributes:
+      label: What makes your account different
+      description: Tick everything that applies.
+      options:
+        - label: Gas meter
+        - label: Dual fuel (gas and electricity)
+        - label: More than one meter for a fuel
+        - label: More than one property on the account
+        - label: More than one Octopus account
+        - label: Export / solar / battery (an export MPAN)
+        - label: Economy 7 or another dual-register meter
+        - label: Prepayment
+        - label: Non-direct-debit pricing
+        - label: A time-of-use tariff (Agile, Go, Cosy, Tracker, Intelligent)
+        - label: An MCP client other than Claude Desktop
+        - label: Something else, described below
+
+  - type: dropdown
+    id: region
+    attributes:
+      label: Supply region
+      description: >
+        The last letter of your tariff code — `E-1R-VAR-22-11-01-**A**`.
+        `list_meter_points` reports it too.
+      options:
+        - A - Eastern England
+        - B - East Midlands
+        - C - London
+        - D - Merseyside and North Wales
+        - E - West Midlands
+        - F - North East England
+        - G - North West England
+        - H - Southern England
+        - J - South East England
+        - K - South Wales
+        - L - South West England
+        - M - Yorkshire
+        - N - Southern Scotland
+        - P - Northern Scotland
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+      description: Which tools gave sensible answers on your account?
+    validations:
+      required: true
+
+  - type: textarea
+    id: broke
+    attributes:
+      label: What didn't
+      description: >
+        Wrong numbers, errors, tools that asked for something they should have
+        worked out, or anything that just looked off. Redacted.
+
+  - type: dropdown
+    id: reconciles
+    attributes:
+      label: Did calculate_cost match a real bill?
+      description: The single most valuable data point in this whole form.
+      options:
+        - Within a few pence over a month
+        - Off by less than a pound
+        - Off by more than a pound
+        - Wildly off
+        - Didn't try
+    validations:
+      required: true
+
+  - type: textarea
+    id: reconcile-detail
+    attributes:
+      label: If it didn't match, by how much?
+      description: >
+        The **difference** is what's useful — a percentage or a pence figure is
+        plenty. You don't need to post your actual bill, and please don't post
+        anything you'd rather not have public.
+      placeholder: "Tool said £2.31 less than the bill over a full month, about 1.4%."

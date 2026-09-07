@@ -1,0 +1,110 @@
+name: Bug report
+description: Something returned the wrong answer, errored, or wouldn't start.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Before you fill this in, one thing matters
+        more than everything else below.
+
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction
+      description: >
+        This is a public issue tracker. The server masks identifiers in its own
+        logs, but anything you paste from a chat window is not masked.
+      options:
+        - label: >
+            I have removed my MPAN, MPRN, meter serial, account number, address,
+            postcode and API key from everything I'm about to paste. Stand-ins
+            like `1234567890123` and `A-XXXX1111` are fine — the shape of the
+            data is what matters, not the identifiers.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >
+        What did you ask, and what came back? If you know which tool ran, say
+        so. Paste the error or the wrong numbers (redacted).
+      placeholder: |
+        I asked "how much gas did I use in August" and got back 47 kWh, which
+        is about a tenth of what my bill says.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      description: If it's a wrong number, what should it have been, and how do you know?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker Compose stack (http://localhost:8080/mcp)
+        - "octopus-mcp over HTTP, no Docker (:8000)"
+        - "octopus-mcp --stdio, launched by the client"
+        - Something else (describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: Which chat app / MCP client
+      placeholder: "Claude Desktop 1.x, LM Studio, VS Code, Open WebUI, …"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >
+        The image tag or digest (`docker compose images`), or the commit you're
+        running. "latest, pulled today" is an acceptable answer.
+      placeholder: "sha256:… / v0.3.0 / latest pulled 2026-09-07"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: account-shape
+    attributes:
+      label: Account shape (optional, but usually the answer)
+      description: >
+        Most bugs so far have come from account shapes the maintainer doesn't
+        have. No identifiers — just the shape.
+      placeholder: |
+        Dual fuel, one property. Electricity is Economy 7 (two registers),
+        gas reports m3. Region D. Non-direct-debit.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server logs (optional)
+      description: >
+        `docker compose logs --tail 50`. These are JSON lines with the API key
+        redacted and meter identifiers masked — but please skim them before
+        pasting rather than trusting that.
+      render: shell
