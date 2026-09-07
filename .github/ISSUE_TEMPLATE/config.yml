@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ngfw-automation/octopus-energy-mcp-server/security/advisories/new
+    about: Please report security problems privately, not as a public issue.
+  - name: What's tested and what isn't
+    url: https://github.com/ngfw-automation/octopus-energy-mcp-server#feedback
+    about: The Feedback section lists the account shapes that have never been run against real data.

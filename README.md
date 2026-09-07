@@ -753,12 +753,22 @@ what broke.** Particularly valuable:
   of pence off your real monthly bill, that is the most valuable bug report
   there is.
 
-**How to report.** Open an issue with what you asked, what came back, and what
-you expected. Please **redact your MPAN, MPRN, meter serial, account number,
-address and API key** — the server masks them in its own logs, but tool output
-pasted into an issue is not masked. `A-XXXX1111` and `1234567890123` are
-perfectly good stand-ins; what matters is the shape of the data, not the
-identifiers.
+**How to report.** Open an issue — there are two templates, and either is a
+fine place to start:
+
+- **Compatibility report** for "my account is shaped differently and here's
+  what happened", whether it worked or not. A report that everything worked on
+  a dual-fuel account in region D is genuinely as useful as a bug.
+- **Bug report** for a wrong number, an error, or something that wouldn't start.
+
+Both open with the same request, which matters more than anything else in them:
+**redact your MPAN, MPRN, meter serial, account number, address, postcode and
+API key.** The server masks those in its own logs, but tool output you paste
+from a chat window is not masked. `A-XXXX1111` and `1234567890123` are perfectly
+good stand-ins — what matters is the shape of the data, not the identifiers.
+
+Found a security problem instead? Don't open a public issue — see
+[SECURITY.md](SECURITY.md).
 
 No telemetry of any kind is collected. Nobody sees anything you don't send.
 
@@ -804,6 +814,16 @@ pytest -q && ruff check .
 verified against a real account — a gas-meter fix from someone with a gas
 meter beats a careful guess from someone without one.
 
+# Security
+
+The API key this server holds grants full access to an Octopus account, so
+security reports are taken seriously and should be sent privately rather than
+opened as public issues. [SECURITY.md](SECURITY.md) covers what is in scope,
+what is a known and accepted limit of this phase, and how to report.
+
 # License
 
 MIT — see [LICENSE](LICENSE).
+
+*This project is not affiliated with, endorsed by, or supported by Octopus
+Energy. It is an independent client of their public API.*
