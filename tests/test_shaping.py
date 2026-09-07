@@ -135,7 +135,7 @@ def test_bill_cost_penny_math():
     b = shaping.bill_cost(
         _kwh_rows([1.0, 2.0]), [_rate(20.0, "DIRECT_DEBIT")],
         "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z",
-        "DIRECT_DEBIT", [], None,
+        "DIRECT_DEBIT", [],
     )
     assert b["unit_cost_pence"] == 60
     assert b["standing_charge_pence"] == 0
@@ -154,7 +154,7 @@ def test_bill_cost_rounds_kwh_per_interval_but_not_cost():
     b = shaping.bill_cost(
         _kwh_rows([0.125] * 8), [_rate(10.0)],
         "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z",
-        None, [], None,
+        None, [],
     )
     assert b["billed_kwh"] == 0.96
     assert b["unit_cost_pence"] == 10
@@ -166,7 +166,7 @@ def test_bill_cost_standing_charge_and_vat():
     b = shaping.bill_cost(
         _kwh_rows([1.0]), [_rate(10.0)],
         "2026-08-01T00:00:00Z", "2026-09-01T00:00:00Z",
-        None, [_sc(45.0)], None,
+        None, [_sc(45.0)],
     )
     assert b["standing_charge_pence"] == 1395
     assert b["sc_source"] == "api"
@@ -176,21 +176,18 @@ def test_bill_cost_standing_charge_and_vat():
     assert b["total_gbp"] == 14.75
 
 
-def test_bill_cost_sc_override_is_vat_inclusive():
-    # The override is the dashboard figure, which includes VAT: 50p/day inc
-    # VAT is 47.6190p/day ex VAT, so 31 days = 1476p ex VAT, not 1550p (F-03).
+def test_bill_cost_says_so_when_no_standing_charge_is_published():
+    """The published charge is the only source. A tariff that publishes none
+    contributes zero, and the total says it may be low, rather than the server
+    substituting a figure of its own."""
     b = shaping.bill_cost(
         _kwh_rows([1.0]), [_rate(10.0)],
         "2026-08-01T00:00:00Z", "2026-09-01T00:00:00Z",
-        None, [_sc(0.0)], 50.0,
+        None, [_sc(0.0)],
     )
-    assert b["sc_source"] == "configured"
-    assert b["standing_charge_pence"] == 1476
-    assert b["subtotal_ex_vat_pence"] == 1486
-    assert b["vat_5pct_pence"] == 74
-    assert b["total_inc_vat_pence"] == 1560
-    # ... and inc VAT it comes back to 31 * 50p, as billed.
-    assert round(b["standing_charge_pence"] * 1.05) == 1550
+    assert b["sc_source"] is None
+    assert b["standing_charge_pence"] == 0
+    assert any("publishes no standing charge" in n for n in b["notes"])
 
 
 def test_bill_cost_fractional_day_standing_charge():
@@ -198,7 +195,7 @@ def test_bill_cost_fractional_day_standing_charge():
     b = shaping.bill_cost(
         _kwh_rows([1.0, 1.0]), [_rate(10.0)],
         "2026-08-01T00:00:00Z", "2026-08-01T01:00:00Z",
-        None, [_sc(48.0)], None,
+        None, [_sc(48.0)],
     )
     assert b["standing_charge_pence"] == 2
 
@@ -209,13 +206,13 @@ def test_bill_cost_payment_method_filter():
     # Exact payment-method match wins
     b = shaping.bill_cost(
         rows, rates, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z",
-        "DIRECT_DEBIT", [], None,
+        "DIRECT_DEBIT", [],
     )
     assert b["unit_cost_pence"] == 10
     # pm=None -> conservative fallback to the highest rate, nothing unpriced
     b2 = shaping.bill_cost(
         rows, rates, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z",
-        None, [], None,
+        None, [],
     )
     assert b2["unit_cost_pence"] == 12
     assert b2["unpriced_kwh"] == 0.0
@@ -226,7 +223,7 @@ def test_bill_cost_no_rates():
     b = shaping.bill_cost(
         _kwh_rows([1.0]), [],
         "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z",
-        None, [], None,
+        None, [],
     )
     assert b["error"] == "no_rates"
 
@@ -264,10 +261,10 @@ def test_sc_accepts_legacy_value_key():
 def test_sc_picks_the_matching_payment_method():
     rows = [_sc(48.2442, pm="DIRECT_DEBIT"), _sc(56.4891, pm="NON_DIRECT_DEBIT")]
     dd, _n, _s = shaping.sc_pence_for_period(
-        rows, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z", None, "DIRECT_DEBIT"
+        rows, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z", "DIRECT_DEBIT"
     )
     ndd, _n2, _s2 = shaping.sc_pence_for_period(
-        rows, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z", None, "NON_DIRECT_DEBIT"
+        rows, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z", "NON_DIRECT_DEBIT"
     )
     assert round(float(dd), 4) == 48.2442
     assert round(float(ndd), 4) == 56.4891
@@ -279,16 +276,16 @@ def test_sc_picks_the_matching_payment_method():
     assert "highest" in note
 
 
-def test_sc_override_wins_over_the_published_charge():
-    """A pinned value comes off the account's own bill; the published one is
-    the tariff's generic charge, and they can differ slightly."""
+def test_sc_unpublished_is_zero_with_a_note_not_a_substituted_figure():
+    """Nothing about the standing charge is configurable: what the tariff
+    publishes is what is used, and a tariff publishing none says so."""
     pence, note, source = shaping.sc_pence_for_period(
-        [_sc(48.0)], "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z", 52.5
+        [_sc(0.0)], "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"
     )
-    assert source == "configured"
-    assert round(float(pence), 4) == 50.0  # 52.5p inc VAT
-    assert "50.4" in note  # names the published figure it overrode
-    # ... and without a pin, the published charge is used.
+    assert source is None
+    assert float(pence) == 0.0
+    assert "publishes no standing charge" in note
+    # ... and a published charge is used as published.
     pence2, _n, source2 = shaping.sc_pence_for_period(
         [_sc(48.0)], "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"
     )
@@ -308,7 +305,7 @@ def test_bill_cost_reconciles_a_month_without_penny_bias():
     b = shaping.bill_cost(
         _kwh_rows(values), [_rate(rate, "DIRECT_DEBIT")],
         "2026-08-01T00:00:00Z", "2026-09-01T00:00:00Z",
-        "DIRECT_DEBIT", [_sc(48.2442, pm="DIRECT_DEBIT")], None,
+        "DIRECT_DEBIT", [_sc(48.2442, pm="DIRECT_DEBIT")],
     )
     expected_unit = round(sum(values) * rate)          # kWh already at 2 dp
     expected_sc = round(31 * 48.2442)
@@ -342,7 +339,7 @@ def test_stale_standing_charge_is_flagged():
     b = shaping.bill_cost(
         _kwh_rows([1.0]), [_rate(10.0)],
         "2026-08-01T00:00:00Z", "2026-09-01T00:00:00Z",
-        None, [ancient], None,
+        None, [ancient],
     )
     assert any("last published on 2017-01-01" in n for n in b["notes"])
 

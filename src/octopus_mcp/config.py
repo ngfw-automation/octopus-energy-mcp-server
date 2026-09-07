@@ -89,25 +89,6 @@ class Settings(BaseSettings):
             raise ValueError("must be a calorific value in MJ/m3, roughly 30-45")
         return v
 
-    # --- Standing charge override (VAT-inclusive pence/day) --------------
-    # Only used when the API publishes no standing charge for the tariff.
-    # Give the figure exactly as the dashboard shows it -- VAT included --
-    # and the server converts it back to ex-VAT internally.
-    standing_charge_electricity: float | None = None
-    standing_charge_gas: float | None = None
-
-    @field_validator("standing_charge_electricity", "standing_charge_gas", mode="before")
-    @classmethod
-    def _sc_non_negative(cls, value: object) -> float | None:
-        if value is None:
-            return None
-        if isinstance(value, str) and not value.strip():
-            return None  # compose passes ${VAR:-} as "" when unset
-        v = float(value)
-        if v < 0:
-            raise ValueError("must be >= 0 (pence per day, VAT inclusive)")
-        return v
-
     # --- Cache TTLs (seconds) ------------------------------------------
     cache_ttl_products: int = 86400
     cache_ttl_rates: int = 86400

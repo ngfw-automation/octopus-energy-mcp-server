@@ -33,10 +33,6 @@ services:
       # a tailnet name, for instance. See "Exposure" in the README.
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
       MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
-      # VAT-inclusive pence/day; only needed when your bill differs from the
-      # standing charge the tariff publishes.
-      STANDING_CHARGE_ELECTRICITY: ${STANDING_CHARGE_ELECTRICITY:-}
-      STANDING_CHARGE_GAS: ${STANDING_CHARGE_GAS:-}
       # Network: bind all interfaces inside the container; host exposure
       # goes through nginx only.
       MCP_HOST: "0.0.0.0"
@@ -46,9 +42,11 @@ services:
     restart: unless-stopped
 
   nginx:
-    # Chainguard nginx, pinned by digest (version lock).
-    # sha256:8a4981bd... == nginx 1.31.5 as of 2026-09-04.
-    image: cgr.dev/chainguard/nginx:latest@sha256:8a4981bd9d32dcf4406bbbac259565962f15c5c3cc235bf9df98fe2e5a9cea19
+    # Chainguard nginx on :latest, so `docker compose pull` picks up their
+    # rebuilds -- Chainguard rebuild images continuously to clear CVEs, and a
+    # digest pin would freeze this front end on the day it was written.
+    image: cgr.dev/chainguard/nginx:latest
+    pull_policy: always
     depends_on:
       - mcp
     ports:
