@@ -4,7 +4,7 @@
 # the exec form). Pinned by digest, which is the version lock: this is
 # Python 3.14.7 as of 2026-09-04. To bump, pull the new image and paste its
 # digest (docker pull prints it).
-FROM cgr.dev/chainguard/python:latest@sha256:115532a106aff6e820cd637809edd0c9239f2269d46fb9937cac703cc4d101e5
+FROM cgr.dev/chainguard/python:latest@sha256:1f37785e5cdb70151f36aaa15e1e3cef4571424dbefbf4b0d8a9222535cb13ff
 
 WORKDIR /app
 
