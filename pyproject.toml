@@ -13,7 +13,7 @@ authors = [{ name = "Nikolay" }]
 dependencies = [
     # mcp 2.x: FastMCP renamed to MCPServer (mcp.server.mcpserver).
     # Locked to the version verified against the HTTP/Docker deployment.
-    "mcp==2.1.1",
+    "mcp==2.2.0",
     "httpx>=0.28.1",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
