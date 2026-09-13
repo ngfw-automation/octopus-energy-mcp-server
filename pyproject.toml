@@ -29,7 +29,7 @@ Repository = "https://github.com/ngfw-automation/octopus-energy-mcp-server"
 Issues = "https://github.com/ngfw-automation/octopus-energy-mcp-server/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "ruff>=0.16.5"]
+dev = ["pytest>=9.1.1", "ruff>=0.16.6"]
 
 [project.scripts]
 octopus-mcp = "octopus_mcp.server:main"
