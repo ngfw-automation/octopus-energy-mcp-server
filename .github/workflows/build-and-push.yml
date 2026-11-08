@@ -110,7 +110,7 @@ jobs:
         # No moving v4 tag exists: this action publishes major aliases only up
         # to v3, and its v4 line as specific tags. Pinned exactly, which is
         # what a signing tool warrants anyway; Dependabot will bump it.
-        uses: sigstore/cosign-installer@v4.1.2
+        uses: sigstore/cosign-installer@v4.1.3
 
       - name: Sign the image (keyless)
         if: github.event_name != 'pull_request' && env.PUBLIC == 'true'
